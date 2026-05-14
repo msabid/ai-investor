@@ -3,186 +3,207 @@ import pandas as pd
 import plotly.express as px
 
 from database.db import init_db, run_query
-from data_sources.market_data import MarketDataClient
-from data_sources.news_data import NewsClient
-from agents.risk_agent import RiskAgent
-from analytics.opportunity_scanner import get_starter_universe, score_universe
+from security.auth import ensure_default_admin, authenticate
+from dashboard.styles import apply_theme
 from dashboard.qa_checklist import QA_ITEMS
+from data_sources.market_data import MarketDataClient
+from agents.risk_agent import RiskAgent
+from agents.opportunity_agent import OpportunityAgent
+from agents.ai_decision_agent import AIDecisionAgent
+from trading.execution_controller import ExecutionController
 
 st.set_page_config(page_title="AI Portfolio Command Center", layout="wide")
-
 init_db()
+ensure_default_admin()
 
-market_client = MarketDataClient()
-news_client = NewsClient()
-risk_agent = RiskAgent()
+if "auth" not in st.session_state:
+    st.session_state.auth = False
+if "theme" not in st.session_state:
+    st.session_state.theme = "Dark"
+
+if not st.session_state.auth:
+    st.title("AI Portfolio Command Center")
+    st.subheader("Secure Login")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        user = authenticate(email, password)
+        if user:
+            st.session_state.auth = True
+            st.session_state.user = user
+            st.rerun()
+        else:
+            st.error("Invalid login.")
+    st.stop()
+
+apply_theme(st, st.session_state.theme)
+
+market = MarketDataClient()
+risk = RiskAgent()
+scanner = OpportunityAgent()
+ai = AIDecisionAgent()
+execution = ExecutionController()
 
 st.sidebar.title("AI Portfolio Command Center")
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Home", "Holdings", "Market", "News", "AI Decisions", "Orders",
-        "Risk", "Opportunity Scanner", "Strategy Performance",
-        "System Health", "Settings", "QA Checklist"
+section = st.sidebar.selectbox("Section", ["Command Center","Portfolio","AI Agents","Risk & Controls","Scanner","System","Settings"])
+pages = {
+"Command Center":["Home","AI Market Intelligence"],
+"Portfolio":["Holdings","Performance"],
+"AI Agents":["AI Decisions","Agent Execution"],
+"Risk & Controls":["Risk Rules","Orders","Kill Switch"],
+"Scanner":["Opportunity Scanner"],
+"System":["System Health","Logs","QA Checklist"],
+"Settings":["App Settings","Security"]
+}
+page = st.sidebar.selectbox("Page", pages[section])
+st.session_state.theme = st.sidebar.selectbox("Theme", ["Dark","Light"])
+if st.sidebar.button("Logout"):
+    st.session_state.auth = False
+    st.rerun()
+
+if "holdings" not in st.session_state:
+    st.session_state.holdings = [
+        {"account_type":"TFSA","ticker":"VFV","asset_type":"ETF","quantity":1.0},
+        {"account_type":"TFSA","ticker":"VEQT","asset_type":"ETF","quantity":1.0},
+        {"account_type":"TFSA","ticker":"ZGD","asset_type":"ETF","quantity":1.0},
+        {"account_type":"NON_REGISTERED","ticker":"NVDA","asset_type":"STOCK","quantity":1.0},
     ]
-)
 
-def load_agent_logs():
-    result = run_query("SELECT agent_name, level, message, created_at FROM agent_logs ORDER BY id DESC LIMIT 50")
-    return pd.DataFrame(result.fetchall(), columns=result.keys())
-
-def get_manual_holdings_df(input_rows):
-    rows = []
-    for row in input_rows:
-        ticker = row["ticker"].upper().strip()
-        if not ticker:
-            continue
-        price_data = market_client.get_price(ticker)
-        quantity = float(row["quantity"])
-        market_value = round(quantity * price_data["price"], 2)
-        rows.append({
-            "account_type": row["account_type"],
-            "ticker": ticker,
-            "asset_type": row["asset_type"],
-            "quantity": quantity,
-            "last_price": price_data["price"],
-            "currency": price_data["currency"],
-            "market_value": market_value
-        })
+def holdings_df():
+    rows=[]
+    for r in st.session_state.holdings:
+        t=str(r.get("ticker","")).upper().strip()
+        if not t: continue
+        p=market.get_price(t)
+        q=float(r.get("quantity",0) or 0)
+        rows.append({**r,"ticker":t,"last_price":p["price"],"currency":p["currency"],"market_value":round(q*p["price"],2)})
     return pd.DataFrame(rows)
 
-default_holdings = [
-    {"account_type": "TFSA", "ticker": "VFV", "asset_type": "ETF", "quantity": 1.0},
-    {"account_type": "TFSA", "ticker": "VEQT", "asset_type": "ETF", "quantity": 1.0},
-    {"account_type": "TFSA", "ticker": "ZGD", "asset_type": "ETF", "quantity": 1.0},
-    {"account_type": "NON_REGISTERED", "ticker": "NVDA", "asset_type": "STOCK", "quantity": 1.0},
-]
+def qdf(sql, params=None):
+    res = run_query(sql, params or {})
+    return pd.DataFrame(res.fetchall(), columns=res.keys())
 
-if "manual_holdings" not in st.session_state:
-    st.session_state.manual_holdings = default_holdings
-
-holdings_df = get_manual_holdings_df(st.session_state.manual_holdings)
+hdf = holdings_df()
+portfolio_value = float(hdf["market_value"].sum()) if not hdf.empty else 0
 
 if page == "Home":
     st.title("AI Portfolio Command Center")
-    st.caption("MVP: dashboard, manual tracking, risk status, opportunity scanner shell, and QA checklist. No real trading.")
-
-    col1, col2, col3, col4 = st.columns(4)
-    total_value = holdings_df["market_value"].sum() if not holdings_df.empty else 0
-    risk_result = risk_agent.evaluate_portfolio(holdings_df)
-
-    col1.metric("Portfolio Value", f"${total_value:,.2f}")
-    col2.metric("Risk Status", risk_result["status"])
-    col3.metric("Live Trading", "DISABLED")
-    col4.metric("Margin", "DISABLED")
-
-    st.subheader("Portfolio Allocation")
-    if not holdings_df.empty:
-        fig = px.pie(holdings_df, names="ticker", values="market_value", title="Current Manual Holdings")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Enter holdings on the Holdings page.")
-
-    st.subheader("System Principle")
-    st.write("1. Survival and capital preservation → 2. Long-term compounding → 3. Maximizing returns")
+    rr = risk.evaluate_portfolio(hdf)
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Portfolio Value", f"${portfolio_value:,.2f}")
+    c2.metric("Risk Status", rr["status"])
+    c3.metric("AI Agent", "ENABLED")
+    c4.metric("Execution", "PAPER NOW / LIVE PATH LOCKED")
+    if not hdf.empty:
+        st.plotly_chart(px.pie(hdf, names="ticker", values="market_value", title="Portfolio Allocation"), use_container_width=True)
 
 elif page == "Holdings":
     st.title("Holdings")
-    st.write("Enter holdings manually for MVP. Broker sync comes later.")
+    ed = st.data_editor(pd.DataFrame(st.session_state.holdings), num_rows="dynamic", use_container_width=True)
+    if st.button("Save Holdings"):
+        st.session_state.holdings = ed.to_dict("records")
+        st.rerun()
+    st.dataframe(hdf, use_container_width=True)
 
-    edited_df = st.data_editor(
-        pd.DataFrame(st.session_state.manual_holdings),
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "account_type": st.column_config.SelectboxColumn("Account Type", options=["TFSA", "NON_REGISTERED", "PAPER"]),
-            "asset_type": st.column_config.SelectboxColumn("Asset Type", options=["ETF", "STOCK", "CASH"]),
-        }
-    )
-
-    if st.button("Save Manual Holdings"):
-        st.session_state.manual_holdings = edited_df.to_dict("records")
-        st.success("Manual holdings saved for this session.")
-
-    holdings_df = get_manual_holdings_df(st.session_state.manual_holdings)
-    st.subheader("Valuation")
-    st.dataframe(holdings_df, use_container_width=True)
-
-    if not holdings_df.empty:
-        fig = px.bar(holdings_df, x="ticker", y="market_value", color="account_type", title="Market Value by Holding")
-        st.plotly_chart(fig, use_container_width=True)
-
-elif page == "Market":
-    st.title("Market")
-    ticker = st.text_input("Ticker", "VFV")
-    if st.button("Fetch Price"):
-        data = market_client.get_price(ticker)
-        st.json(data)
-
-elif page == "News":
-    st.title("News")
-    ticker = st.text_input("Ticker or topic", "NVDA")
-    headlines = news_client.get_headlines(ticker)
-    st.dataframe(pd.DataFrame(headlines), use_container_width=True)
+elif page == "AI Market Intelligence":
+    st.title("AI Market Intelligence")
+    tickers = list(hdf["ticker"]) if not hdf.empty else ["VFV","VEQT","ZGD","NVDA"]
+    st.dataframe(pd.DataFrame([market.get_price(t) for t in tickers]), use_container_width=True)
 
 elif page == "AI Decisions":
     st.title("AI Decisions")
-    st.warning("AI integration is disabled in MVP. AI cannot execute trades or override risk rules.")
-    st.write("Future AI duties: summarize news, summarize macro, explain trades, rank opportunities, detect risk patterns.")
+    st.success("AI agent can create proposed executable orders. Current execution mode: PAPER.")
+    scored = scanner.run()
+    recs = ai.recommend(scored)
+    st.dataframe(pd.DataFrame(recs), use_container_width=True)
+    if st.button("AI Agent Create Proposed Orders"):
+        for r in recs:
+            if r["action"] == "BUY":
+                execution.propose_from_recommendation(r, market.get_price(r["ticker"])["price"], portfolio_value)
+        st.success("AI agent created proposed executable paper orders.")
+
+elif page == "Agent Execution":
+    st.title("Agent Execution")
+    st.warning("Agent execution is active for PAPER mode. Live mode pathway exists but is locked.")
+    proposed = qdf("SELECT * FROM proposed_trades ORDER BY created_at DESC LIMIT 100")
+    st.dataframe(proposed, use_container_width=True)
+    oid = st.number_input("Order ID to approve", min_value=0, step=1)
+    if st.button("Approve Order"):
+        run_query("UPDATE proposed_trades SET approved=1,status='APPROVED' WHERE id=:id", {"id": int(oid)})
+        st.success("Order approved.")
+    if st.button("AI Agent Execute Approved Orders"):
+        done = execution.execute_approved(portfolio_value)
+        st.success(f"Executed: {done}")
+
+elif page == "Risk Rules":
+    st.title("Risk Rules")
+    s = risk.settings()
+    with st.form("risk"):
+        max_risk = st.slider("Max risk per trade", 0.001, 0.05, float(s["max_risk_per_trade"]), 0.001)
+        daily = st.slider("Daily loss limit", 0.005, 0.10, float(s["daily_loss_limit"]), 0.005)
+        weekly = st.slider("Weekly loss limit", 0.01, 0.20, float(s["weekly_loss_limit"]), 0.005)
+        monthly = st.slider("Monthly drawdown limit", 0.02, 0.30, float(s["monthly_drawdown_limit"]), 0.005)
+        concentration = st.slider("Single-stock concentration", 0.05, 0.80, float(s["single_stock_concentration_limit"]), 0.01)
+        paper = st.checkbox("Paper trading enabled", value=bool(s["paper_trading_enabled"]))
+        agent_exec = st.checkbox("Agent execution enabled", value=bool(s["agent_execution_enabled"]))
+        approval = st.checkbox("Human approval required", value=bool(s["human_approval_required"]))
+        st.checkbox("Live trading enabled", value=bool(s["live_trading_enabled"]), disabled=True)
+        st.checkbox("Margin enabled", value=bool(s["margin_enabled"]), disabled=True)
+        if st.form_submit_button("Save Risk Settings"):
+            run_query('''
+            UPDATE risk_settings SET max_risk_per_trade=:max_risk,daily_loss_limit=:daily,
+            weekly_loss_limit=:weekly,monthly_drawdown_limit=:monthly,
+            single_stock_concentration_limit=:concentration,paper_trading_enabled=:paper,
+            agent_execution_enabled=:agent_exec,human_approval_required=:approval,
+            updated_at=CURRENT_TIMESTAMP WHERE id=1
+            ''', {"max_risk":max_risk,"daily":daily,"weekly":weekly,"monthly":monthly,
+            "concentration":concentration,"paper":int(paper),"agent_exec":int(agent_exec),"approval":int(approval)})
+            st.success("Saved.")
 
 elif page == "Orders":
     st.title("Orders")
-    st.error("No real trading is available in MVP.")
-    st.write("Order execution requires paper trading first, then broker integration, then human approval.")
+    tab1, tab2 = st.tabs(["Proposed", "Executed"])
+    with tab1:
+        st.dataframe(qdf("SELECT * FROM proposed_trades ORDER BY created_at DESC LIMIT 100"), use_container_width=True)
+    with tab2:
+        st.dataframe(qdf("SELECT * FROM executed_trades ORDER BY executed_at DESC LIMIT 100"), use_container_width=True)
 
-elif page == "Risk":
-    st.title("Risk")
-    risk_result = risk_agent.evaluate_portfolio(holdings_df)
-    st.metric("Risk Status", risk_result["status"])
-
-    if risk_result["warnings"]:
-        for warning in risk_result["warnings"]:
-            st.warning(warning)
-    else:
-        st.success("No MVP risk warnings detected.")
-
-    st.subheader("Mandatory Rules")
-    st.json(risk_result["rules"])
+elif page == "Kill Switch":
+    st.title("Kill Switch")
+    st.error("Live execution is locked. Use this to stop paper order flow.")
+    if st.button("Reject All Open Orders"):
+        run_query("UPDATE proposed_trades SET status='REJECTED' WHERE status IN ('PROPOSED','APPROVED')")
+        st.success("Open proposed/approved orders rejected.")
 
 elif page == "Opportunity Scanner":
     st.title("Opportunity Scanner")
-    st.caption("MVP shell only. Scores are placeholders until real data validation is added.")
-    universe = get_starter_universe()
-    scored = score_universe(universe)
-    st.dataframe(scored, use_container_width=True)
+    scored = scanner.run()
+    min_score = st.slider("Minimum opportunity score", 0, 100, 60)
+    max_risk = st.slider("Maximum risk score", 0, 100, 70)
+    st.dataframe(scored[(scored.opportunity_score >= min_score) & (scored.risk_score <= max_risk)], use_container_width=True)
 
-elif page == "Strategy Performance":
+elif page == "Performance":
     st.title("Strategy Performance")
-    st.info("Strategy isolation and performance tracking will be added in later phases.")
+    st.dataframe(qdf("SELECT * FROM executed_trades ORDER BY executed_at DESC LIMIT 100"), use_container_width=True)
 
 elif page == "System Health":
     st.title("System Health")
-    st.metric("Overall Status", "YELLOW")
-    st.write("Yellow because MVP uses mock market data and has no broker/database resilience checks yet.")
+    st.dataframe(qdf("SELECT component,status,MAX(last_run) AS last_run,message FROM system_health GROUP BY component ORDER BY component"), use_container_width=True)
 
-    st.subheader("Recent Agent Logs")
-    logs = load_agent_logs()
-    st.dataframe(logs, use_container_width=True)
-
-elif page == "Settings":
-    st.title("Settings")
-    st.subheader("Safety Defaults")
-    st.json({
-        "live_trading_enabled": False,
-        "paper_trading_enabled": False,
-        "margin_enabled": False,
-        "tfsa_mode": "long-term ETF-focused",
-        "options_enabled": False,
-        "human_approval_required": True
-    })
+elif page == "Logs":
+    st.title("Agent Logs")
+    st.dataframe(qdf("SELECT * FROM agent_logs ORDER BY id DESC LIMIT 200"), use_container_width=True)
 
 elif page == "QA Checklist":
     st.title("QA Checklist")
-    st.write("Use this checklist after each phase.")
     for item in QA_ITEMS:
-        st.checkbox(item, value=False)
+        st.checkbox(item)
+
+elif page == "App Settings":
+    st.title("App Settings")
+    st.json(risk.settings())
+    st.info("Live execution pathway is present through BrokerInterface and LiveBrokerPlaceholder, but locked.")
+
+elif page == "Security":
+    st.title("Security")
+    st.warning("Change default admin password before deployment. Production should use Supabase Auth/Auth0/Clerk.")
