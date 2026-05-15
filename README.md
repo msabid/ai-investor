@@ -1,50 +1,54 @@
-# AI Portfolio Command Center
+# AI Portfolio Command Center — Phase 1.5
 
-A Python-based AI-assisted investing and trading platform for a Canadian investor.
+Secure online-ready dashboard with:
 
-## Primary Rule
+- Login
+- Dropdown/grouped navigation
+- Dark/light theme
+- Editable risk settings
+- Expanded opportunity scanner
+- AI recommendations
+- Agent paper execution
+- Future-ready live execution pathway
 
-1. Survival and capital preservation  
-2. Long-term compounding  
-3. Maximizing returns  
+## Important
 
-This system never promises guaranteed profits. It starts with dashboard, tracking, paper trading, and strict risk controls before any broker execution.
+Agent execution is enabled now for **paper/simulated execution only**.
 
-## MVP Includes
+Real trading is not active, but the architecture keeps the future pathway open through:
 
-- Streamlit dashboard shell
-- SQLite schema
-- Manual holdings input
-- Portfolio value chart
-- Basic market data module
-- Basic risk status display
-- Agent logging
-- QA checklist shell
-- No real trading
-
-## Install
-
-```bash
-cd ai-portfolio-command-center
-python -m venv .venv
-source .venv/bin/activate   # Mac/Linux
-# .venv\Scripts\activate  # Windows
-
-pip install -r requirements.txt
-```
+- `ExecutionMode`
+- `BrokerInterface`
+- `PaperBroker`
+- `LiveBrokerPlaceholder`
+- `ExecutionController`
+- risk gate
+- human approval gate
+- kill-switch gate
 
 ## Run
 
 ```bash
+cd ai-portfolio-command-center-phase-1-5
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Safety Defaults
+Default login:
 
-- Live trading disabled
-- Paper trading disabled
-- Margin disabled
-- TFSA treated as long-term investing only
-- No options
-- No naked derivatives
-- No automated execution
+- Email: `admin@example.com`
+- Password: `ChangeMeNow123!`
+
+Change before deployment.
+
+
+## Auth Redesign Update
+
+Added:
+- Centered product-style login/register screen
+- Registration tab
+- Password strength validation
+- Change-password page
+- Improved dark styling and alignment

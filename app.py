@@ -3,7 +3,8 @@ import pandas as pd
 import plotly.express as px
 
 from database.db import init_db, run_query
-from security.auth import ensure_default_admin, authenticate
+from security.auth import ensure_default_admin, authenticate, change_password
+from dashboard.auth_ui import auth_screen
 from dashboard.styles import apply_theme
 from dashboard.qa_checklist import QA_ITEMS
 from data_sources.market_data import MarketDataClient
@@ -22,18 +23,7 @@ if "theme" not in st.session_state:
     st.session_state.theme = "Dark"
 
 if not st.session_state.auth:
-    st.title("AI Portfolio Command Center")
-    st.subheader("Secure Login")
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        user = authenticate(email, password)
-        if user:
-            st.session_state.auth = True
-            st.session_state.user = user
-            st.rerun()
-        else:
-            st.error("Invalid login.")
+    auth_screen()
     st.stop()
 
 apply_theme(st, st.session_state.theme)
@@ -206,4 +196,16 @@ elif page == "App Settings":
 
 elif page == "Security":
     st.title("Security")
-    st.warning("Change default admin password before deployment. Production should use Supabase Auth/Auth0/Clerk.")
+    st.warning("Change the default password before deployment. Production should use Supabase Auth/Auth0/Clerk.")
+    st.subheader("Change Password")
+    with st.form("change_password_form"):
+        current = st.text_input("Current password", type="password")
+        new_password = st.text_input("New password", type="password")
+        confirm_password = st.text_input("Confirm new password", type="password")
+        submitted = st.form_submit_button("Update password")
+        if submitted:
+            ok, msg = change_password(st.session_state.user["id"], current, new_password, confirm_password)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
